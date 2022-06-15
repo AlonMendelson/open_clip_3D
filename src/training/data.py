@@ -25,6 +25,88 @@ except ImportError:
 
 from open_clip import tokenize
 
+import training.co3d_dataset_arrange as co3d_dataset_arrange
+
+import gzip
+
+import training.co3d_types as co3d_types
+
+from typing import List
+
+from scipy.spatial.transform import Rotation as Rot
+
+
+
+class Co3dDataset(Dataset):
+    def __init__(self,transforms,dataset_root,mode,categories,known_prop = 1,unseen_prop = 1):
+        logging.debug(f'Creating data from {dataset_root}.')
+        self.dataset_root = dataset_root
+        self.transforms = transforms
+        self.all_pairs = co3d_dataset_arrange.create_dataset_list(dataset_root,mode,categories,known_prop,unseen_prop)
+    
+    def __len__(self):
+        return len(self.all_pairs)
+
+    def __getitem__(self, idx):
+
+        pair = self.all_pairs[idx]
+        ref_image = self.transforms(Image.open(os.path.join(self.dataset_root,pair[2])))
+        pred_image = self.transforms(Image.open(os.path.join(self.dataset_root,pair[4])))
+
+
+
+        ref_rot = pair[5]
+        pred_rot = pair[6]
+
+        r1 = Rot.from_matrix(ref_rot)
+        r2 = Rot.from_matrix(pred_rot)
+
+        r1_inv = r1.inv()
+        r_diff = r1_inv*r2
+        r_diff = r_diff.as_euler('yzx',degrees=True)
+        #r_diff = r_diff.as_rotvec()
+        #norm_sq = np.dot(r_diff, r_diff)
+        #angle = np.sqrt(norm_sq)
+        angle = r_diff[0]
+
+        if angle < 0:
+            clockwise_angle = angle * (-1)
+            counterclockwise_angle = 360 + angle
+        else:
+            clockwise_angle = 360 - angle
+            counterclockwise_angle = angle
+        angle = min(abs(clockwise_angle),abs(counterclockwise_angle))
+
+        #####angle for regression#####
+        angle = angle/180
+        angle = torch.Tensor(np.array([np.float32(angle)]))
+        ##############################
+
+        #####angle for classification#####
+        #if(angle == 180):
+        #    label = 8
+        #else:
+        #    label = np.floor(angle/20)
+        
+        #angle = torch.zeros((1,9),dtype=torch.float32)
+        #angle[label] = 1
+        ##################################
+        
+
+        path_ref = [pair[2]]
+        path_rot = [pair[4]]
+
+        text = tokenize(["a photo of a " + pair[7]])[0]
+
+        return ref_image, pred_image, text, angle, path_ref, path_rot
+
+
+
+
+        
+    
+
+
 
 class CsvDataset(Dataset):
     def __init__(self, input_filename, transforms, img_key, caption_key, sep="\t"):
@@ -307,12 +389,42 @@ def get_csv_dataset(args, preprocess_fn, is_train, epoch=0):
 
     return DataInfo(dataloader, sampler)
 
+def get_co3d_dataset(args, preprocess_fn, is_train, epoch=0):
+    input_filename = args.train_data if is_train else args.val_data
+    mode = "train" if is_train else "test"
+    categories = args.categories
+    assert input_filename
+    dataset = Co3dDataset(
+        preprocess_fn,
+        input_filename,
+        mode,
+        categories)
+    num_samples = len(dataset)
+    sampler = DistributedSampler(dataset) if args.distributed and is_train else None
+    shuffle = is_train and sampler is None
+
+    dataloader = DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=shuffle,
+        num_workers=args.workers,
+        pin_memory=True,
+        sampler=sampler,
+        drop_last=is_train,
+    )
+    dataloader.num_samples = num_samples
+    dataloader.num_batches = len(dataloader)
+
+    return DataInfo(dataloader, sampler)
+
 
 def get_dataset_fn(data_path, dataset_type):
     if dataset_type == "webdataset":
         return get_wds_dataset
     elif dataset_type == "csv":
         return get_csv_dataset
+    elif dataset_type == "co3d":
+        return get_co3d_dataset
     elif dataset_type == "auto":
         ext = data_path.split('.')[-1]
         if ext in ['csv', 'tsv']:

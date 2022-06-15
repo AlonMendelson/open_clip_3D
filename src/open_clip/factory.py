@@ -7,6 +7,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import torch
+import torch.nn as nn
 
 from .model import CLIP, convert_weights_to_fp16
 from .openai import load_openai_model
@@ -55,6 +56,24 @@ def load_state_dict(checkpoint_path: str, map_location='cpu'):
     if next(iter(state_dict.items()))[0].startswith('module'):
         state_dict = {k[7:]: v for k, v in state_dict.items()}
     return state_dict
+
+class clip_plus_mlp(nn.Module):
+    def __init__(self,clip_model, input_size,output_size):
+        super(clip_plus_mlp, self).__init__()
+        self.clip_model = clip_model
+        self.FC_Layers = nn.Sequential(
+            nn.Linear(input_size, input_size // 2),
+            nn.ReLU(inplace=True),
+            nn.Linear(input_size//2, input_size//4),
+            nn.ReLU(),
+            nn.Linear(input_size//4,output_size))
+
+    def forward(self, img_1,img_2,text):
+        image_features1, text_features1, logit_scale1 = self.clip_model(img_1, text)
+        image_features2, text_features2, logit_scale2 = self.clip_model(img_2, text)
+        x = torch.cat([image_features1,image_features2],dim=1)
+        out = self.FC_Layers(x)
+        return out
 
 
 def create_model(
@@ -136,6 +155,12 @@ def create_model_and_transforms(
         pretrained_image=pretrained_image)
     preprocess_train = image_transform(model.visual.image_size, is_train=True)
     preprocess_val = image_transform(model.visual.image_size, is_train=False)
+
+    for param in model.parameters():
+        param.requires_grad = False
+
+    model =  clip_plus_mlp(model,2048,1)
+    model.to(device)
     return model, preprocess_train, preprocess_val
 
 

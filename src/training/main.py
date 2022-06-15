@@ -59,6 +59,8 @@ def main():
     args.distributed = False
     args.local_rank, args.rank, args.world_size = world_info_from_env()
 
+    args.categories = args.categories.split(",")
+
     args.log_path = None
     if is_master(args, local=args.log_local):
         log_base_path = os.path.join(args.logs, args.name)

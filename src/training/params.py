@@ -25,6 +25,12 @@ def parse_args():
         help="Path to csv file with validation data",
     )
     parser.add_argument(
+        "--categories",
+        type=str,
+        default=None,
+        help="Path to csv file with validation data",
+    )
+    parser.add_argument(
         "--train-num-samples",
         type=int,
         default=None,
@@ -38,7 +44,7 @@ def parse_args():
     )
     parser.add_argument(
         "--dataset-type",
-        choices=["webdataset", "csv", "auto"],
+        choices=["webdataset","co3d", "csv", "auto"],
         default="auto",
         help="Which type of dataset to process."
     )

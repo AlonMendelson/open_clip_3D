@@ -49,13 +49,15 @@ def train_one_epoch(model, data, epoch, optimizer, scaler, scheduler, args, tb_w
     autocast = torch.cuda.amp.autocast if args.precision == 'amp' else suppress
 
     model.train()
-    loss = ClipLoss(
-        local_loss=args.local_loss,
-        gather_with_grad=args.gather_with_grad,
-        cache_labels=True,
-        rank=args.rank,
-        world_size=args.world_size,
-        use_horovod=args.horovod)
+    #loss = ClipLoss(
+    #    local_loss=args.local_loss,
+    #    gather_with_grad=args.gather_with_grad,
+    #    cache_labels=True,
+    #    rank=args.rank,
+    #    world_size=args.world_size,
+    #    use_horovod=args.horovod)
+
+    loss = torch.nn.MSELoss()
 
     dataloader, sampler = data['train'].dataloader, data['train'].sampler
     if args.distributed and sampler is not None:
@@ -71,16 +73,18 @@ def train_one_epoch(model, data, epoch, optimizer, scaler, scheduler, args, tb_w
         step = num_batches_per_epoch * epoch + i
         scheduler(step)
 
-        images, texts = batch
-        images = images.to(device=device, non_blocking=True)
+        ref_images, pred_images, texts, angles, path_ref, path_rot = batch
+        ref_images = ref_images.to(device=device, non_blocking=True)
+        pred_images = pred_images.to(device=device, non_blocking=True)
         texts = texts.to(device=device, non_blocking=True)
+        angles = angles.to(device=device, non_blocking=True)
 
         data_time_m.update(time.time() - end)
         optimizer.zero_grad()
 
         with autocast():
-            image_features, text_features, logit_scale = model(images, texts)
-            total_loss = loss(image_features, text_features, logit_scale)
+            pred_angles = model(ref_images, pred_images, texts)
+            total_loss = loss(angles, pred_angles)
 
         if scaler is not None:
             scaler.scale(total_loss).backward()
@@ -97,28 +101,28 @@ def train_one_epoch(model, data, epoch, optimizer, scaler, scheduler, args, tb_w
             optimizer.step()
 
         # Note: we clamp to 4.6052 = ln(100), as in the original paper.
-        with torch.no_grad():
-            unwrap_model(model).logit_scale.clamp_(0, math.log(100))
+        #with torch.no_grad():
+        #    unwrap_model(model).logit_scale.clamp_(0, math.log(100))
 
         batch_time_m.update(time.time() - end)
         end = time.time()
         batch_count = i + 1
         if is_master(args) and (i % 100 == 0 or batch_count == num_batches_per_epoch):
-            batch_size = len(images)
+            batch_size = len(ref_images)
             num_samples = batch_count * batch_size * args.world_size
             samples_per_epoch = dataloader.num_samples
             percent_complete = 100.0 * batch_count / num_batches_per_epoch
 
             # NOTE loss is coarsely sampled, just master node and per log update
             loss_m.update(total_loss.item(), batch_size)
-            logit_scale_scalar = logit_scale.item()
+            #logit_scale_scalar = logit_scale.item()
             logging.info(
                 f"Train Epoch: {epoch} [{num_samples:>{sample_digits}}/{samples_per_epoch} ({percent_complete:.0f}%)] "
                 f"Loss: {loss_m.val:#.5g} ({loss_m.avg:#.4g}) "
                 f"Data (t): {data_time_m.avg:.3f} "
                 f"Batch (t): {batch_time_m.avg:.3f} "
                 f"LR: {optimizer.param_groups[0]['lr']:5f} "
-                f"Logit Scale: {logit_scale_scalar:.3f}"
+             #   f"Logit Scale: {logit_scale_scalar:.3f}"
             )
 
             # Save train loss / etc. Using non avg meter values as loggers have their own smoothing
@@ -126,7 +130,7 @@ def train_one_epoch(model, data, epoch, optimizer, scaler, scheduler, args, tb_w
                 "loss": loss_m.val,
                 "data_time": data_time_m.val,
                 "batch_time": batch_time_m.val,
-                "scale":  logit_scale_scalar,
+                #"scale":  logit_scale_scalar,
                 "lr": optimizer.param_groups[0]["lr"]
             }
             for name, val in log_data.items():
@@ -150,8 +154,8 @@ def evaluate(model, data, epoch, args, tb_writer=None):
     device = torch.device(args.device)
     model.eval()
 
-    zero_shot_metrics = zero_shot_eval(model, data, epoch, args)
-    metrics.update(zero_shot_metrics)
+    #zero_shot_metrics = zero_shot_eval(model, data, epoch, args)
+    #metrics.update(zero_shot_metrics)
 
     autocast = torch.cuda.amp.autocast if args.precision == 'amp' else suppress
     if 'val' in data and (args.val_frequency and ((epoch % args.val_frequency) == 0 or epoch == args.epochs)):
@@ -162,29 +166,45 @@ def evaluate(model, data, epoch, args, tb_writer=None):
         # FIXME this does not scale past small eval datasets
         # all_image_features @ all_text_features will blow up memory and compute very quickly
         cumulative_loss = 0.0
-        all_image_features, all_text_features = [], []
+        #all_image_features, all_text_features = [], []
         with torch.no_grad():
             for i, batch in enumerate(dataloader):
-                images, texts = batch
-                images = images.to(device=device, non_blocking=True)
+                ref_images, pred_images, texts, angles, path_ref, path_rot = batch
+                ref_images = ref_images.to(device=device, non_blocking=True)
+                pred_images = pred_images.to(device=device, non_blocking=True)
                 texts = texts.to(device=device, non_blocking=True)
+                angles = angles.to(device=device, non_blocking=True)
 
                 with autocast():
-                    image_features, text_features, logit_scale = model(images, texts)
+                    #image_features, text_features, logit_scale = model(images, texts)
                     # features are accumulated in CPU tensors, otherwise GPU memory exhausted quickly
                     # however, system RAM is easily exceeded and compute time becomes problematic
-                    all_image_features.append(image_features.cpu())
-                    all_text_features.append(text_features.cpu())
-                    logit_scale = logit_scale.mean()
-                    logits_per_image = logit_scale * image_features @ text_features.t()
-                    logits_per_text = logits_per_image.t()
+                    #all_image_features.append(image_features.cpu())
+                    #all_text_features.append(text_features.cpu())
+                    #logit_scale = logit_scale.mean()
+                    #logits_per_image = logit_scale * image_features @ text_features.t()
+                    #logits_per_text = logits_per_image.t()
+                    pred_angles = model(ref_images, pred_images, texts)
 
-                    batch_size = images.shape[0]
-                    labels = torch.arange(batch_size, device=device).long()
-                    total_loss = (
-                        F.cross_entropy(logits_per_image, labels) +
-                        F.cross_entropy(logits_per_text, labels)
-                    ) / 2
+                    batch_size = ref_images.shape[0]
+                    #labels = torch.arange(batch_size, device=device).long()
+                    #total_loss = (
+                    #    F.cross_entropy(logits_per_image, labels) +
+                    #    F.cross_entropy(logits_per_text, labels)
+                    #) / 2
+                    total_loss = F.mse_loss(angles, pred_angles)
+                    #abs_diff = torch.abs(torch.subtract(angles,pred_angles))
+                    #worst = torch.argmax(abs_diff)
+                    #worst = worst.detach().cpu().item()
+                    worst = 0
+                    ref = path_ref[0][worst]
+                    rot = path_rot[0][worst]
+                    ang = angles[worst].detach().cpu().item()
+                    pred = pred_angles[worst].detach().cpu().item()
+                    line = "the ref path is {path1}, the rot path is {path2}, the GT angle is {gt}, the predicted angle is {p} \n".format(path1 = ref, path2 = rot, gt = ang, p = pred)
+                    with open('examples_stopsign.txt','a') as f:
+                        f.write(line)
+                        f.close()
 
                 cumulative_loss += total_loss * batch_size
                 num_samples += batch_size
@@ -193,14 +213,14 @@ def evaluate(model, data, epoch, args, tb_writer=None):
                         f"Eval Epoch: {epoch} [{num_samples} / {samples_per_val}]\t"
                         f"Loss: {cumulative_loss / num_samples:.6f}\t")
 
-            val_metrics = get_metrics(
-                image_features=torch.cat(all_image_features),
-                text_features=torch.cat(all_text_features),
-                logit_scale=logit_scale.cpu(),
-            )
+            #val_metrics = get_metrics(
+            #    image_features=torch.cat(all_image_features),
+            #    text_features=torch.cat(all_text_features),
+            #    logit_scale=logit_scale.cpu(),
+            #)
             loss = cumulative_loss / num_samples
             metrics.update(
-                {**val_metrics, "val_loss": loss.item(), "epoch": epoch, "num_samples": num_samples}
+                {"val_loss": loss.item(), "epoch": epoch, "num_samples": num_samples}
             )
 
     if not metrics:
