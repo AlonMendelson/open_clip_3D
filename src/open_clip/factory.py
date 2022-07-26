@@ -12,7 +12,7 @@ import torch.nn as nn
 from .model import CLIP, convert_weights_to_fp16
 from .openai import load_openai_model
 from .pretrained import get_pretrained_url, download_pretrained
-from .transform import image_transform
+from .transform import image_transform, image_transform2
 
 
 _MODEL_CONFIG_PATHS = [Path(__file__).parent / f"model_configs/"]
@@ -67,12 +67,16 @@ class clip_plus_mlp(nn.Module):
             nn.Linear(input_size//2, input_size//4),
             nn.ReLU(),
             nn.Linear(input_size//4,output_size))
+        self.softmax = nn.Softmax(dim = 1)
 
     def forward(self, img_1,img_2,text):
         image_features1, text_features1, logit_scale1 = self.clip_model(img_1, text)
         image_features2, text_features2, logit_scale2 = self.clip_model(img_2, text)
         x = torch.cat([image_features1,image_features2],dim=1)
         out = self.FC_Layers(x)
+        #####model for classification#####
+        #out = self.softmax(out)
+        ##################################
         return out
 
 
@@ -156,10 +160,17 @@ def create_model_and_transforms(
     preprocess_train = image_transform(model.visual.image_size, is_train=True)
     preprocess_val = image_transform(model.visual.image_size, is_train=False)
 
-    for param in model.parameters():
-        param.requires_grad = False
+    #for param in model.parameters():
+    #   param.requires_grad = False
+    #for param in model.transformer.parameters():
+    #    param.requires_grad = False
+    #####model for regression#####
+    #model =  clip_plus_mlp(model,1024,1)
+    ##############################
 
-    model =  clip_plus_mlp(model,2048,1)
+    #####model for classification#####
+    #model =  clip_plus_mlp(model,2048,9)
+    ##################################
     model.to(device)
     return model, preprocess_train, preprocess_val
 

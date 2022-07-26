@@ -14,39 +14,10 @@ try:
 except ImportError:
     wandb = None
 
-from open_clip import ClipLoss, CEClipRegLoss
+from open_clip import ClipLoss
 from .distributed import is_master
 from .zero_shot import zero_shot_eval
 from .zero_shot_co3d import zero_shot_eval_co3d
-from open_clip import tokenize
-from .co3d_zeroshot_data import co3d_classnames, co3d_template
-
-def create_classifier(model, classnames, templates, args,with_grad):
-    if with_grad:
-        zeroshot_weights = []
-        for classname in classnames:
-            texts = [template(classname) for template in templates]  # format with class
-            texts = tokenize(texts).to(args.device)  # tokenize
-            if args.distributed and not args.horovod:
-                class_embeddings = model.module.encode_text(texts)
-            else:
-                class_embeddings = model.encode_text(texts)
-            zeroshot_weights.append(class_embeddings)
-        zeroshot_weights = torch.stack(zeroshot_weights, dim=0).to(args.device)
-    else:
-        with torch.no_grad():
-            zeroshot_weights = []
-            for classname in classnames:
-                texts = [template(classname) for template in templates]  # format with class
-                texts = tokenize(texts).to(args.device)  # tokenize
-                if args.distributed and not args.horovod:
-                    class_embeddings = model.module.encode_text(texts)
-                else:
-                    class_embeddings = model.encode_text(texts)
-                zeroshot_weights.append(class_embeddings)
-            zeroshot_weights = torch.stack(zeroshot_weights, dim=1).to(args.device)
-    zeroshot_weights = zeroshot_weights.view(-1,zeroshot_weights.shape[2])        
-    return zeroshot_weights
 
 
 class AverageMeter(object):
@@ -74,13 +45,18 @@ def unwrap_model(model):
         return model
 
 
-def train_one_epoch(model, reference_model, data, epoch, optimizer, scaler, scheduler, args, tb_writer=None):
+def train_one_epoch(model, data, epoch, optimizer, scaler, scheduler, args, tb_writer=None):
     device = torch.device(args.device)
     autocast = torch.cuda.amp.autocast if args.precision == 'amp' else suppress
 
     model.train()
-    #loss = torch.nn.CrossEntropyLoss()
-    loss = CEClipRegLoss(reference_model,args)
+    loss = ClipLoss(
+        local_loss=args.local_loss,
+        gather_with_grad=args.gather_with_grad,
+        cache_labels=True,
+        rank=args.rank,
+        world_size=args.world_size,
+        use_horovod=args.horovod)
 
     #data['train'].set_epoch(epoch)  # set epoch in process safe manner via sampler or shared_epoch
     dataloader = data['train'].dataloader
@@ -91,30 +67,24 @@ def train_one_epoch(model, reference_model, data, epoch, optimizer, scaler, sche
     num_batches_per_epoch = dataloader.num_batches
     sample_digits = math.ceil(math.log(dataloader.num_samples + 1, 10))
 
-
     loss_m = AverageMeter()
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
     end = time.time()
     for i, batch in enumerate(dataloader):
-        #create classifier
-        classifier = create_classifier(model,co3d_classnames,co3d_template,args,True)
         step = num_batches_per_epoch * epoch + i
         scheduler(step)
 
         images, texts, targets = batch
         images = images.to(device=device, non_blocking=True)
         texts = texts.to(device=device, non_blocking=True)
-        targets = targets.to(device=device, non_blocking=True)
 
         data_time_m.update(time.time() - end)
         optimizer.zero_grad()
 
         with autocast():
             image_features, text_features, logit_scale = model(images, texts)
-            logits = logit_scale * image_features @ classifier.t()
-            #try using the gather they do
-            total_loss = loss(model,logits,targets)
+            total_loss = loss(image_features, text_features, logit_scale)
 
         if scaler is not None:
             scaler.scale(total_loss).backward()
@@ -205,23 +175,28 @@ def evaluate(model, data, epoch, args, tb_writer=None):
         # all_image_features @ all_text_features will blow up memory and compute very quickly
         cumulative_loss = 0.0
         all_image_features, all_text_features = [], []
-        classifier = create_classifier(model,co3d_classnames,co3d_template,args,False)
         with torch.no_grad():
             for i, batch in enumerate(dataloader):
                 images, texts, targets = batch
                 images = images.to(device=device, non_blocking=True)
                 texts = texts.to(device=device, non_blocking=True)
-                targets = targets.to(device=device, non_blocking=True)
 
                 with autocast():
                     image_features, text_features, logit_scale = model(images, texts)
                     # features are accumulated in CPU tensors, otherwise GPU memory exhausted quickly
                     # however, system RAM is easily exceeded and compute time becomes problematic
+                    all_image_features.append(image_features.cpu())
+                    all_text_features.append(text_features.cpu())
                     logit_scale = logit_scale.mean()
-                    logits = logit_scale * image_features @ classifier.t()
-                    #logits = F.softmax(logits,dim=1)
+                    logits_per_image = logit_scale * image_features @ text_features.t()
+                    logits_per_text = logits_per_image.t()
+
                     batch_size = images.shape[0]
-                    total_loss = F.cross_entropy(logits, targets)
+                    labels = torch.arange(batch_size, device=device).long()
+                    total_loss = (
+                        F.cross_entropy(logits_per_image, labels) +
+                        F.cross_entropy(logits_per_text, labels)
+                    ) / 2
 
                 cumulative_loss += total_loss * batch_size
                 num_samples += batch_size
@@ -230,10 +205,14 @@ def evaluate(model, data, epoch, args, tb_writer=None):
                         f"Eval Epoch: {epoch} [{num_samples} / {samples_per_val}]\t"
                         f"Loss: {cumulative_loss / num_samples:.6f}\t")
 
-
+            val_metrics = get_metrics(
+                image_features=torch.cat(all_image_features),
+                text_features=torch.cat(all_text_features),
+                logit_scale=logit_scale.cpu(),
+            )
             loss = cumulative_loss / num_samples
             metrics.update(
-                {"val_loss": loss.item(), "epoch": epoch, "num_samples": num_samples}
+                {**val_metrics, "val_loss": loss.item(), "epoch": epoch, "num_samples": num_samples}
             )
 
     if not metrics:

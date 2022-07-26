@@ -25,11 +25,38 @@ def parse_args():
         help="Path to csv file with validation data",
     )
     parser.add_argument(
+        "--zeroshot-data",
+        type=str,
+        default=None,
+        help="Path to csv file with validation data",
+    )
+    parser.add_argument(
+        "--annot-data",
+        type=str,
+        default=None,
+        help="Path to file with annotations data",
+    )
+    parser.add_argument(
         "--categories",
         type=str,
         default=None,
         help="Path to csv file with validation data",
     )
+
+    parser.add_argument(
+        "--wise",
+        type=str,
+        default=None,
+        help="use WISE-ft with the checkpoint",
+    )
+
+    parser.add_argument(
+        "--wise-alpha",
+        type=float,
+        default=0.5,
+        help="WISE alpha parameter",
+    )
+
     parser.add_argument(
         "--train-num-samples",
         type=int,

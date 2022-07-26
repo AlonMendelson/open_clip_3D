@@ -1,5 +1,6 @@
 from torchvision.transforms import Normalize, Compose, RandomResizedCrop, InterpolationMode, ToTensor, Resize, \
     CenterCrop
+import numpy as np
 
 
 def _convert_to_rgb(image):
@@ -24,6 +25,21 @@ def image_transform(
         return Compose([
             Resize(image_size, interpolation=InterpolationMode.BICUBIC),
             CenterCrop(image_size),
+            _convert_to_rgb,
+            ToTensor(),
+            normalize,
+        ])
+
+def image_transform2(
+        image_size: int,
+        is_train: bool,
+        mean=(0.48145466, 0.4578275, 0.40821073),
+        std=(0.26862954, 0.26130258, 0.27577711)
+):
+    normalize = Normalize(mean=mean, std=std)
+    return Compose([
+            CenterCrop(700),
+            Resize(image_size,interpolation=InterpolationMode.BICUBIC),
             _convert_to_rgb,
             ToTensor(),
             normalize,

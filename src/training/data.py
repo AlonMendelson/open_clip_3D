@@ -5,7 +5,7 @@ import math
 import os
 import random
 from dataclasses import dataclass
-
+import pickle
 import braceexpand
 import numpy as np
 import pandas as pd
@@ -16,6 +16,7 @@ from webdataset.tariterators import base_plus_ext, url_opener, tar_file_expander
 from PIL import Image
 from torch.utils.data import Dataset, DataLoader, SubsetRandomSampler
 from torch.utils.data.distributed import DistributedSampler
+from .co3d_zeroshot_data import co3d_classnames, co3d_template
 
 
 try:
@@ -36,13 +37,203 @@ from typing import List
 from scipy.spatial.transform import Rotation as Rot
 
 
+class Co3dDataset_New(Dataset):
+    def __init__(self,transforms,dataset_root,annotations_root,mode,categories):
+        logging.debug(f'Creating data from {dataset_root}.')
+        self.dataset_root = dataset_root
+        self.annotations_root = annotations_root
+        self.transforms = transforms
+        self.mode = mode
+        if mode == "train":
+            pickle_file_path = os.path.join(dataset_root,"co3d_train.pkl")
+        elif mode == "val":
+            pickle_file_path = os.path.join(dataset_root,"co3d_val.pkl")
+        else:
+            pickle_file_path = os.path.join(dataset_root,"co3d_leftout.pkl")
+
+        self.all_samples = pd.read_pickle(pickle_file_path)
+        self.classnames = []
+        for classname in co3d_classnames:
+            self.classnames += [template(classname) for template in co3d_template]  
+
+    
+    def __len__(self):
+        return len(self.all_samples)
+
+    def _load_16big_png_depth(self,depth_png):
+        with Image.open(depth_png) as depth_pil:
+        # the image is stored with 16-bit depth but PIL reads it as I (32 bit).
+        # we cast it to uint16, then reinterpret as float16, then cast to float32
+            depth = (
+                np.frombuffer(np.array(depth_pil, dtype=np.uint16), dtype=np.float16)
+                .astype(np.float32)
+                .reshape((depth_pil.size[1], depth_pil.size[0]))
+        )
+        return depth
+
+    def _load_depth(self,path, scale_adjustment):
+        if not path.lower().endswith(".jpg.geometric.png"):
+            raise ValueError('unsupported depth file name "%s"' % path)
+
+        d = self._load_16big_png_depth(path) * scale_adjustment
+        d[~np.isfinite(d)] = 0.0
+        return d[None]  # fake feature channel
+
+    def __getitem__(self, idx):
+
+        sample = self.all_samples[idx]
+        image_path = sample[0]
+        depth_path = sample[1]
+        scale = sample[2]
+        mask_depth_path = sample[3]
+        gt_pose = sample[4]
+        sample_category = sample[5]
+
+        image = self.transforms(Image.open(os.path.join(self.dataset_root,image_path)))
+        #TODO: Crop depth
+        depth = self._load_depth(os.path.join(self.dataset_root,depth_path),scale)
+
+        r = Rot.from_matrix(gt_pose)
+        angle = r.as_euler('yzx',degrees=True)[0]
+        angle = abs(angle)
+        qunatized_angle = int(math.floor(angle/18)*18)
+        if qunatized_angle == 0:
+            caption = "a photo of a " + sample_category +"."
+        else:
+            caption = "a photo of a " + sample_category + " rotated by " + str(qunatized_angle) + " degrees."
+        
+        target = self.classnames.index(caption)
+        text = tokenize([caption])[0]
+
+
+        return image, text, target
+
+class Co3dDataset_CE(Dataset):
+    def __init__(self,transforms,dataset_root,annotations_root,mode,categories):
+        logging.debug(f'Creating data from {dataset_root}.')
+        self.dataset_root = dataset_root
+        self.annotations_root = annotations_root
+        self.transforms = transforms
+        self.mode = mode
+        if mode == "train":
+            pickle_file_path = os.path.join(dataset_root,"co3d_train.pkl")
+        elif mode == "val":
+            pickle_file_path = os.path.join(dataset_root,"co3d_val.pkl")
+        else:
+            pickle_file_path = os.path.join(dataset_root,"co3d_leftout.pkl")
+
+        self.all_samples = pd.read_pickle(pickle_file_path)
+        self.classnames = []
+        for classname in co3d_classnames:
+            self.classnames += [template(classname) for template in co3d_template]  
+
+    
+    def __len__(self):
+        return len(self.all_samples)
+
+    def _load_16big_png_depth(self,depth_png):
+        with Image.open(depth_png) as depth_pil:
+        # the image is stored with 16-bit depth but PIL reads it as I (32 bit).
+        # we cast it to uint16, then reinterpret as float16, then cast to float32
+            depth = (
+                np.frombuffer(np.array(depth_pil, dtype=np.uint16), dtype=np.float16)
+                .astype(np.float32)
+                .reshape((depth_pil.size[1], depth_pil.size[0]))
+        )
+        return depth
+
+    def _load_depth(self,path, scale_adjustment):
+        if not path.lower().endswith(".jpg.geometric.png"):
+            raise ValueError('unsupported depth file name "%s"' % path)
+
+        d = self._load_16big_png_depth(path) * scale_adjustment
+        d[~np.isfinite(d)] = 0.0
+        return d[None]  # fake feature channel
+
+    def __getitem__(self, idx):
+        
+        sample = self.all_samples[idx]
+        image_path = sample[0]
+        depth_path = sample[1]
+        scale = sample[2]
+        mask_depth_path = sample[3]
+        gt_pose = sample[4]
+        sample_category = sample[5]
+
+        image = self.transforms(Image.open(os.path.join(self.dataset_root,image_path)))
+        #TODO: Crop depth
+        depth = self._load_depth(os.path.join(self.dataset_root,depth_path),scale)
+
+        r = Rot.from_matrix(gt_pose)
+        angle = r.as_euler('yzx',degrees=True)[0]
+        angle = abs(angle)
+
+        granularity  = 18
+
+        classes_per_category = len(co3d_template)
+
+        quantized_angle = int(math.floor(angle/granularity))
+
+        class_within_category = quantized_angle + 1
+
+        category_index = co3d_classnames.index(sample_category)
+
+        label1 = category_index*classes_per_category + class_within_category
+        if self.mode == "train":
+            label1_prob = 0.6
+        else:
+            label1_prob = 1.0
+
+        label2 = label1 + 1
+        if class_within_category == classes_per_category - 1 or self.mode == "val" or self.mode == "zeroshot":
+            label2_prob = 0.0 
+        else:
+            label2_prob = 0.15
+
+        label3 = label1 - 1
+        if class_within_category == 1 or self.mode == "val" or self.mode == "zeroshot":
+            label3_prob = 0.0 
+        else:
+            label3_prob = 0.15
+
+        category_label = category_index*classes_per_category
+        if self.mode == "train":
+            category_label_prob = 0.1
+        else:
+            category_label_prob = 0.0
+
+        train_val_target = torch.zeros(len(self.classnames),dtype=torch.float32)
+
+        train_val_target[label1] = label1_prob
+        if label2 < len(self.classnames):
+            train_val_target[label2] = label2_prob
+        train_val_target[label3] = label3_prob
+        train_val_target[category_label] = category_label_prob
+
+
+
+        target = train_val_target/torch.sum(train_val_target)
+
+
+
+        if quantized_angle == 0:
+            caption = "a photo of a " + sample_category +" from the front."
+        else:
+            caption = "a photo of a " + sample_category + " rotated by " + str(quantized_angle*granularity) + " degrees."
+
+        text = tokenize([caption])[0]   
+
+        return image, text, target
 
 class Co3dDataset(Dataset):
-    def __init__(self,transforms,dataset_root,mode,categories,known_prop = 1,unseen_prop = 1):
+    def __init__(self,transforms,dataset_root,mode,categories):
         logging.debug(f'Creating data from {dataset_root}.')
         self.dataset_root = dataset_root
         self.transforms = transforms
-        self.all_pairs = co3d_dataset_arrange.create_dataset_list(dataset_root,mode,categories,known_prop,unseen_prop)
+        if mode == "train":
+            self.all_pairs = co3d_dataset_arrange.create_dataset_list(dataset_root,mode,categories,800000)
+        else:
+            self.all_pairs = co3d_dataset_arrange.create_dataset_list(dataset_root,mode,categories,80000)
     
     def __len__(self):
         return len(self.all_pairs)
@@ -76,9 +267,11 @@ class Co3dDataset(Dataset):
             clockwise_angle = 360 - angle
             counterclockwise_angle = angle
         angle = min(abs(clockwise_angle),abs(counterclockwise_angle))
+        #angle = counterclockwise_angle
 
         #####angle for regression#####
         angle = angle/180
+        #angle = angle/360
         angle = torch.Tensor(np.array([np.float32(angle)]))
         ##############################
 
@@ -86,9 +279,9 @@ class Co3dDataset(Dataset):
         #if(angle == 180):
         #    label = 8
         #else:
-        #    label = np.floor(angle/20)
+        #    label = int(np.floor(angle/20))
         
-        #angle = torch.zeros((1,9),dtype=torch.float32)
+        #angle = torch.zeros(9,dtype=torch.float32)
         #angle[label] = 1
         ##################################
         
@@ -389,6 +582,81 @@ def get_csv_dataset(args, preprocess_fn, is_train, epoch=0):
 
     return DataInfo(dataloader, sampler)
 
+def get_new_co3d_dataset(args, preprocess_fn, is_train, is_val, epoch=0):
+    if is_train:
+        input_filename = args.train_data
+        mode = "train"
+    else:
+        if is_val:
+            input_filename = args.val_data
+            mode = "val"
+        else:
+            input_filename = args.zeroshot_data
+            mode = "zeroshot"
+    annot_filename = args.annot_data
+    categories = args.categories
+    assert input_filename
+    dataset = Co3dDataset_New(
+        preprocess_fn,
+        input_filename,
+        annot_filename,
+        mode,
+        categories)
+    num_samples = len(dataset)
+    sampler = DistributedSampler(dataset) if args.distributed and is_train else None
+    shuffle = is_train and sampler is None
+
+    dataloader = DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=shuffle,
+        num_workers=args.workers,
+        pin_memory=True,
+        sampler=sampler,
+        drop_last=is_train,
+    )
+    dataloader.num_samples = num_samples
+    dataloader.num_batches = len(dataloader)
+
+    return DataInfo(dataloader, sampler)
+def get_co3d_dataset_ce(args, preprocess_fn, is_train, is_val, epoch=0):
+    if is_train:
+        input_filename = args.train_data
+        mode = "train"
+    else:
+        if is_val:
+            input_filename = args.val_data
+            mode = "val"
+        else:
+            input_filename = args.zeroshot_data
+            mode = "zeroshot"
+    annot_filename = args.annot_data
+    categories = args.categories
+    assert input_filename
+    dataset = Co3dDataset_CE(
+        preprocess_fn,
+        input_filename,
+        annot_filename,
+        mode,
+        categories)
+    num_samples = len(dataset)
+    sampler = DistributedSampler(dataset) if args.distributed and is_train else None
+    shuffle = is_train and sampler is None
+
+    dataloader = DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=shuffle,
+        num_workers=args.workers,
+        pin_memory=True,
+        sampler=sampler,
+        drop_last=is_train,
+    )
+    dataloader.num_samples = num_samples
+    dataloader.num_batches = len(dataloader)
+
+    return DataInfo(dataloader, sampler)
+
 def get_co3d_dataset(args, preprocess_fn, is_train, epoch=0):
     input_filename = args.train_data if is_train else args.val_data
     mode = "train" if is_train else "test"
@@ -424,7 +692,7 @@ def get_dataset_fn(data_path, dataset_type):
     elif dataset_type == "csv":
         return get_csv_dataset
     elif dataset_type == "co3d":
-        return get_co3d_dataset
+        return get_co3d_dataset_ce
     elif dataset_type == "auto":
         ext = data_path.split('.')[-1]
         if ext in ['csv', 'tsv']:
@@ -444,12 +712,13 @@ def get_data(args, preprocess_fns, epoch=0):
 
     if args.train_data:
         data["train"] = get_dataset_fn(args.train_data, args.dataset_type)(
-            args, preprocess_train, is_train=True, epoch=epoch)
-
+            args, preprocess_train, is_train=True, is_val=False)
     if args.val_data:
         data["val"] = get_dataset_fn(args.val_data, args.dataset_type)(
-            args, preprocess_val, is_train=False)
-
+            args, preprocess_val, is_train=False, is_val=True)
+    if args.zeroshot_data:
+        data["zeroshot"] = get_dataset_fn(args.zeroshot_data, args.dataset_type)(
+            args, preprocess_val, is_train=False, is_val=False)
     if args.imagenet_val is not None:
         data["imagenet-val"] = get_imagenet(args, preprocess_fns, "val")
 

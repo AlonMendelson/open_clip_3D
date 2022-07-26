@@ -1,7 +1,10 @@
+from turtle import forward
 import torch
 import torch.distributed.nn
 from torch import distributed as dist, nn as nn
 from torch.nn import functional as F
+from .tokenizer import tokenize
+from training.co3d_zeroshot_data import co3d_classnames, co3d_loss_template
 
 try:
     import horovod.torch as hvd
@@ -112,3 +115,92 @@ class ClipLoss(nn.Module):
             F.cross_entropy(logits_per_text, labels)
             ) / 2
         return total_loss
+
+
+class CEClipRegLoss(nn.Module):
+        def __init__(
+            self,
+            reference_model,
+            args,
+            lambda1 = 1):
+            super().__init__()
+            self.args = args
+            self.reference_model = reference_model
+            self.CE_loss = nn.CrossEntropyLoss()
+            self.cosine_loss = nn.CosineEmbeddingLoss()
+            self.lambda1 = lambda1
+            self.classnames = []
+            for classname in co3d_classnames:
+                self.classnames += [template(classname) for template in co3d_loss_template]
+        def forward(self,model,logits,targets):
+            device = logits.device
+            self.reference_model.eval()
+            texts = tokenize(self.classnames).to(device)  # tokenize
+            with torch.no_grad():
+                if self.args.distributed and not self.args.horovod:
+                    ref_class_embeddings = self.reference_model.module.encode_text(texts)
+                else:
+                    ref_class_embeddings = self.reference_model.encode_text(texts)
+            
+            if self.args.distributed and not self.args.horovod:
+                class_embeddings = model.module.encode_text(texts)
+            else:
+                class_embeddings = model.encode_text(texts)    
+
+            cosine_loss_targets =  torch.ones(len(self.classnames)).to(device)
+
+            cosine_loss = self.cosine_loss(ref_class_embeddings,class_embeddings,cosine_loss_targets)
+
+            xe_loss = self.CE_loss(logits,targets)
+
+            return xe_loss + self.lambda1*cosine_loss   
+
+class CEClipRegLossImg(nn.Module):
+        def __init__(
+            self,
+            reference_model,
+            args,
+            lambda_text = 1,
+            lambda_img = 1):
+            super().__init__()
+            self.args = args
+            self.reference_model = reference_model
+            self.CE_loss = nn.CrossEntropyLoss()
+            self.cosine_loss = nn.CosineEmbeddingLoss()
+            self.lambda_text = lambda_text
+            self.lambda_img = lambda_img
+            self.classnames = []
+            for classname in co3d_classnames:
+                self.classnames += [template(classname) for template in co3d_loss_template]
+        def forward(self,model,logits,targets, images):
+            device = logits.device
+            self.reference_model.eval()
+            texts = tokenize(self.classnames).to(device)  # tokenize
+            with torch.no_grad():
+                if self.args.distributed and not self.args.horovod:
+                    ref_class_embeddings = self.reference_model.module.encode_text(texts)
+                    ref_image_embeddings = self.reference_model.module.encode_image(images)
+                else:
+                    ref_class_embeddings = self.reference_model.encode_text(texts)
+                    ref_image_embeddings = self.reference_model.encode_image(images)
+            
+            if self.args.distributed and not self.args.horovod:
+                class_embeddings = model.module.encode_text(texts)
+                image_embeddings = model.module.encode_image(images)
+            else:
+                class_embeddings = model.encode_text(texts)
+                image_embeddings = model.encode_image(images)    
+
+            cosine_loss_targets =  torch.ones(len(self.classnames)).to(device)
+
+            cosine_loss_targets_img = torch.ones(images.shape[0])
+
+            cosine_loss_text = self.cosine_loss(ref_class_embeddings,class_embeddings,cosine_loss_targets)
+
+            cosine_loss_image = self.cosine_loss(ref_image_embeddings,image_embeddings,cosine_loss_targets_img)
+
+            xe_loss = self.CE_loss(logits,targets)
+
+            return xe_loss + self.lambda_text*cosine_loss_text + self.lambda_img*cosine_loss_image    
+            
+

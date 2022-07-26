@@ -2,6 +2,7 @@ import logging
 import os
 import random
 from datetime import datetime
+import copy
 
 import numpy as np
 import torch
@@ -59,7 +60,8 @@ def main():
     args.distributed = False
     args.local_rank, args.rank, args.world_size = world_info_from_env()
 
-    args.categories = args.categories.split(",")
+    if args.categories != None:
+        args.categories = args.categories.split(",")
 
     args.log_path = None
     if is_master(args, local=args.log_local):
@@ -154,7 +156,7 @@ def main():
         if args.ddp_static_graph:
             # this doesn't exist in older PyTorch, arg only added if enabled
             ddp_args['static_graph'] = True
-        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[device], **ddp_args)
+        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[device])
 
     # create optimizer and scaler
     optimizer = None
@@ -244,15 +246,33 @@ def main():
         wandb.save(params_file)
         logging.debug('Finished loading wandb.')
 
+    if args.wise != None:
+        theta_0 = model.state_dict()
+        cp = torch.load(args.wise, map_location=device)
+        theta_1 = cp["state_dict"]
+        # make sure checkpoints are compatible
+        assert set(theta_0.keys()) == set(theta_1.keys())
+
+        # interpolate between checkpoints with mixing coefficient alpha
+        theta = {
+        key: (1-args.wise_alpha) * theta_0[key] + args.wise_alpha * theta_1[key]
+        for key in theta_0.keys()
+        }
+        model.load_state_dict(theta)
+
+
+
     if 'train' not in data:
         evaluate(model, data, start_epoch, args, writer)
         return
+
+    reference_model = copy.deepcopy(model)
 
     for epoch in range(start_epoch, args.epochs):
         if is_master(args):
             logging.info(f'Start epoch {epoch}')
 
-        train_one_epoch(model, data, epoch, optimizer, scaler, scheduler, args, writer)
+        train_one_epoch(model, reference_model, data, epoch, optimizer, scaler, scheduler, args, writer)
         completed_epoch = epoch + 1
 
         if any(v in data for v in ('val', 'imagenet-val', 'imagenet-v2')):
