@@ -34,7 +34,7 @@ def run(model, classifier, dataloader, args):
     autocast = torch.cuda.amp.autocast if args.precision == 'amp' else suppress
     with torch.no_grad():
         top1, top3, n = 0., 0., 0.
-        for images, texts, targets in tqdm(dataloader, unit_scale=args.batch_size):
+        for images, targets in tqdm(dataloader, unit_scale=args.batch_size):
             images = images.to(args.device)
             target = targets.to(args.device)
             target = torch.argmax(target,dim=1)

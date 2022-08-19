@@ -1,7 +1,7 @@
 
 
-co3d_classnames = ["backpack","bicycle","book","car","chair","hairdryer","handbag","hydrant","keyboard","laptop","motorcycle","mouse","remote"
-                   ,"teddybear", "toaster","toilet","toybus","toyplane","toytrain","toytruck"]
+co3d_classnames = ["backpack","bicycle","book","car","chair","hairdryer","keyboard","laptop","motorcycle","mouse"
+                   ,"teddybear", "toilet","toybus","toyplane","toytrain","toytruck"]
 
 
 

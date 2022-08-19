@@ -7,6 +7,8 @@ from tqdm import tqdm
 
 from open_clip import tokenize
 from .imagenet_zeroshot_data import imagenet_classnames, openai_imagenet_template
+from torchmetrics import ConfusionMatrix
+import numpy as np
 
 
 def zero_shot_classifier(model, classnames, templates, args):
@@ -26,7 +28,7 @@ def zero_shot_classifier(model, classnames, templates, args):
     return zeroshot_weights
 
 
-def accuracy(output, target, topk=(1,)):
+def accuracy(output, target,  topk=(1,)):
     pred = output.topk(max(topk), 1, True, True)[1].t()
     correct = pred.eq(target.view(1, -1).expand_as(pred))
     return [float(correct[:k].reshape(-1).float().sum(0, keepdim=True).cpu().numpy()) for k in topk]
@@ -36,6 +38,7 @@ def run(model, classifier, dataloader, args):
     autocast = torch.cuda.amp.autocast if args.precision == 'amp' else suppress
     with torch.no_grad():
         top1, top5, n = 0., 0., 0.
+        #confmat = np.zeros((1000,1000))
         for images, target in tqdm(dataloader, unit_scale=args.batch_size):
             images = images.to(args.device)
             target = target.to(args.device)
@@ -50,6 +53,11 @@ def run(model, classifier, dataloader, args):
                 logits = 100. * image_features @ classifier
 
             # measure accuracy
+            #np_logits = logits.cpu().detach().numpy()
+            #np_target = target.cpu().detach().numpy()
+            #model_preds = np.argmax(np_logits,1)
+            #for i in range (np_target.size):
+            #    confmat[model_preds[i]][np_target[i]] += 1
             acc1, acc5 = accuracy(logits, target, topk=(1, 5))
             top1 += acc1
             top5 += acc5
@@ -85,5 +93,7 @@ def zero_shot_eval(model, data, epoch, args):
         results['imagenetv2-zeroshot-val-top5'] = top5
 
     logging.info('Finished zero-shot imagenet.')
+
+    #torch.save(torch.from_numpy(confmat),"cm.pt")
 
     return results

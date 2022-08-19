@@ -116,11 +116,11 @@ class Co3dDataset_CE(Dataset):
         self.transforms = transforms
         self.mode = mode
         if mode == "train":
-            pickle_file_path = os.path.join(dataset_root,"co3d_train.pkl")
+            pickle_file_path = os.path.join(dataset_root,"co3d_train_red_val_out.pkl")
         elif mode == "val":
-            pickle_file_path = os.path.join(dataset_root,"co3d_val.pkl")
+            pickle_file_path = os.path.join(dataset_root,"co3d_val_red_val_out.pkl")
         else:
-            pickle_file_path = os.path.join(dataset_root,"co3d_leftout.pkl")
+            pickle_file_path = os.path.join(dataset_root,"co3d_leftout_red_val_out.pkl")
 
         self.all_samples = pd.read_pickle(pickle_file_path)
         self.classnames = []
@@ -180,7 +180,7 @@ class Co3dDataset_CE(Dataset):
 
         label1 = category_index*classes_per_category + class_within_category
         if self.mode == "train":
-            label1_prob = 0.6
+            label1_prob = 1.0
         else:
             label1_prob = 1.0
 
@@ -188,17 +188,17 @@ class Co3dDataset_CE(Dataset):
         if class_within_category == classes_per_category - 1 or self.mode == "val" or self.mode == "zeroshot":
             label2_prob = 0.0 
         else:
-            label2_prob = 0.15
+            label2_prob = 0.0
 
         label3 = label1 - 1
         if class_within_category == 1 or self.mode == "val" or self.mode == "zeroshot":
             label3_prob = 0.0 
         else:
-            label3_prob = 0.15
+            label3_prob = 0.0
 
         category_label = category_index*classes_per_category
         if self.mode == "train":
-            category_label_prob = 0.1
+            category_label_prob = 0.0
         else:
             category_label_prob = 0.0
 
@@ -215,15 +215,7 @@ class Co3dDataset_CE(Dataset):
         target = train_val_target/torch.sum(train_val_target)
 
 
-
-        if quantized_angle == 0:
-            caption = "a photo of a " + sample_category +" from the front."
-        else:
-            caption = "a photo of a " + sample_category + " rotated by " + str(quantized_angle*granularity) + " degrees."
-
-        text = tokenize([caption])[0]   
-
-        return image, text, target
+        return image, target
 
 class Co3dDataset(Dataset):
     def __init__(self,transforms,dataset_root,mode,categories):

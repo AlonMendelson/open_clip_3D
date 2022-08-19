@@ -22,29 +22,19 @@ from open_clip import tokenize
 from .co3d_zeroshot_data import co3d_classnames, co3d_template
 
 def create_classifier(model, classnames, templates, args,with_grad):
-    if with_grad:
+    autocast = torch.cuda.amp.autocast if args.precision == 'amp' else suppress
+    with torch.no_grad():
         zeroshot_weights = []
         for classname in classnames:
             texts = [template(classname) for template in templates]  # format with class
             texts = tokenize(texts).to(args.device)  # tokenize
-            if args.distributed and not args.horovod:
-                class_embeddings = model.module.encode_text(texts)
-            else:
-                class_embeddings = model.encode_text(texts)
-            zeroshot_weights.append(class_embeddings)
-        zeroshot_weights = torch.stack(zeroshot_weights, dim=0).to(args.device)
-    else:
-        with torch.no_grad():
-            zeroshot_weights = []
-            for classname in classnames:
-                texts = [template(classname) for template in templates]  # format with class
-                texts = tokenize(texts).to(args.device)  # tokenize
+            with autocast():
                 if args.distributed and not args.horovod:
                     class_embeddings = model.module.encode_text(texts)
                 else:
                     class_embeddings = model.encode_text(texts)
-                zeroshot_weights.append(class_embeddings)
-            zeroshot_weights = torch.stack(zeroshot_weights, dim=1).to(args.device)
+            zeroshot_weights.append(class_embeddings)
+        zeroshot_weights = torch.stack(zeroshot_weights, dim=1).to(args.device)
     zeroshot_weights = zeroshot_weights.view(-1,zeroshot_weights.shape[2])        
     return zeroshot_weights
 
@@ -79,8 +69,8 @@ def train_one_epoch(model, reference_model, data, epoch, optimizer, scaler, sche
     autocast = torch.cuda.amp.autocast if args.precision == 'amp' else suppress
 
     model.train()
-    #loss = torch.nn.CrossEntropyLoss()
-    loss = CEClipRegLoss(reference_model,args)
+    loss = torch.nn.CrossEntropyLoss()
+    #loss = CEClipRegLoss(reference_model,args)
 
     #data['train'].set_epoch(epoch)  # set epoch in process safe manner via sampler or shared_epoch
     dataloader = data['train'].dataloader
@@ -97,24 +87,32 @@ def train_one_epoch(model, reference_model, data, epoch, optimizer, scaler, sche
     data_time_m = AverageMeter()
     end = time.time()
     for i, batch in enumerate(dataloader):
+
         #create classifier
-        classifier = create_classifier(model,co3d_classnames,co3d_template,args,True)
+        texts = []
+        for classname in co3d_classnames:
+            texts_class = [template(classname) for template in co3d_template]  # format with class
+            texts_class = tokenize(texts_class).to(args.device)  # tokenize
+            texts.append(texts_class)
+        texts = torch.stack(texts, dim=0).to(args.device)
+        texts = texts.view(-1,texts.shape[2]) 
+
         step = num_batches_per_epoch * epoch + i
         scheduler(step)
 
-        images, texts, targets = batch
+        images, targets = batch
         images = images.to(device=device, non_blocking=True)
-        texts = texts.to(device=device, non_blocking=True)
         targets = targets.to(device=device, non_blocking=True)
 
         data_time_m.update(time.time() - end)
         optimizer.zero_grad()
 
         with autocast():
-            image_features, text_features, logit_scale = model(images, texts)
-            logits = logit_scale * image_features @ classifier.t()
+            image_features,text_features, logit_scale = model(images,texts)
+            logits = logit_scale * image_features @ text_features.t()
             #try using the gather they do
-            total_loss = loss(model,logits,targets)
+            total_loss = loss(logits,targets)
+            #total_loss = loss(model,logits,targets)
 
         if scaler is not None:
             scaler.scale(total_loss).backward()
@@ -205,12 +203,18 @@ def evaluate(model, data, epoch, args, tb_writer=None):
         # all_image_features @ all_text_features will blow up memory and compute very quickly
         cumulative_loss = 0.0
         all_image_features, all_text_features = [], []
-        classifier = create_classifier(model,co3d_classnames,co3d_template,args,False)
         with torch.no_grad():
             for i, batch in enumerate(dataloader):
-                images, texts, targets = batch
+                images, targets = batch
                 images = images.to(device=device, non_blocking=True)
-                texts = texts.to(device=device, non_blocking=True)
+                        #create classifier
+                texts = []
+                for classname in co3d_classnames:
+                    texts_class = [template(classname) for template in co3d_template]  # format with class
+                    texts_class = tokenize(texts_class).to(args.device)  # tokenize
+                    texts.append(texts_class)
+                texts = torch.stack(texts, dim=0).to(args.device)
+                texts = texts.view(-1,texts.shape[2]) 
                 targets = targets.to(device=device, non_blocking=True)
 
                 with autocast():
@@ -218,7 +222,7 @@ def evaluate(model, data, epoch, args, tb_writer=None):
                     # features are accumulated in CPU tensors, otherwise GPU memory exhausted quickly
                     # however, system RAM is easily exceeded and compute time becomes problematic
                     logit_scale = logit_scale.mean()
-                    logits = logit_scale * image_features @ classifier.t()
+                    logits = logit_scale * image_features @text_features.t()
                     #logits = F.softmax(logits,dim=1)
                     batch_size = images.shape[0]
                     total_loss = F.cross_entropy(logits, targets)
