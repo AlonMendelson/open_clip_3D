@@ -19,7 +19,13 @@ def parse_args():
         help="Path to csv filewith training data",
     )
     parser.add_argument(
-        "--val-data",
+        "--val-in-data",
+        type=str,
+        default=None,
+        help="Path to csv file with validation data",
+    )
+    parser.add_argument(
+        "--val-out-data",
         type=str,
         default=None,
         help="Path to csv file with validation data",

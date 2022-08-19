@@ -185,8 +185,11 @@ def evaluate(model, data, epoch, args, tb_writer=None):
     zero_shot_metrics = zero_shot_eval(model, data, epoch, args)
     metrics.update(zero_shot_metrics)
 
-    co3d_val_metric = zero_shot_eval_co3d(model, data["val"], epoch, "val-co3d",args)
-    metrics.update(co3d_val_metric)
+    co3d_in_val_metric = zero_shot_eval_co3d(model, data["val_in"], epoch, "val-in-co3d",args)
+    metrics.update(co3d_in_val_metric)
+
+    co3d_out_val_metric = zero_shot_eval_co3d(model, data["val_out"], epoch, "val-out-co3d",args)
+    metrics.update(co3d_out_val_metric)
 
     if args.zeroshot_data:
         co3d_zeroshot_metric = zero_shot_eval_co3d(model, data["zeroshot"], epoch, "zeroshot-co3d",args)
@@ -194,8 +197,8 @@ def evaluate(model, data, epoch, args, tb_writer=None):
 
 
     autocast = torch.cuda.amp.autocast if args.precision == 'amp' else suppress
-    if 'val' in data and (args.val_frequency and ((epoch % args.val_frequency) == 0 or epoch == args.epochs)):
-        dataloader = data['val'].dataloader
+    if 'val_in' in data and (args.val_frequency and ((epoch % args.val_frequency) == 0 or epoch == args.epochs)):
+        dataloader = data['val_in'].dataloader
         num_samples = 0
         samples_per_val = dataloader.num_samples
 

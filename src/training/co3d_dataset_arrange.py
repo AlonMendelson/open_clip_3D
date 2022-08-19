@@ -3,7 +3,7 @@ import os
 import json
 import random
 import gzip
-import co3d_types as co3d_types
+import training.co3d_types as co3d_types
 import numpy as np
 from typing import List
 from numpy.linalg import inv
@@ -297,7 +297,102 @@ def create_depth_dataset_new_val(dataset_root,sequence_filter_root,mode):
         pickle.dump(left_out_samples, f)
 
 
+def create_dataset_4_splits(dataset_root,sequence_filter_root,mode):
+    random.seed(42)
+    train_samples = []
+    in_val_samples = []
+    out_val_samples = []
+    left_out_samples = []
+    for category in categories:
+        category_frameanot_path = os.path.join(dataset_root,category,"frame_annotations.jgz")
+        with gzip.open(category_frameanot_path, "rt", encoding="utf8") as zipfile:
+                frame_annots_list = co3d_types.load_dataclass(zipfile, List[co3d_types.FrameAnnotation])
+        
+        relevant_sequences = {}
+        reference_seq_code = 0
+        annotations_dir = os.path.join(sequence_filter_root,category)
+        for sequence in os.listdir(annotations_dir):
+            #get sequence code
+            sequence_code = sequence.split(".")[0]
+            #get sequence json file
+            sequence_json = os.path.join(annotations_dir,sequence)
+            #open json file
+            json_file = open(sequence_json)
+            #get data
+            data = json.load(json_file)
+            relevant_sequences[sequence_code] = data
+            reference_seq_code = data["reference_seq"]
+        if category == "book":
+            reference_seq_code = "102_11955_20634"
+        all_rotation_matrices = {}
+        for frame in frame_annots_list:
+            if frame.sequence_name in relevant_sequences:
+                R = np.array(frame.viewpoint.R)
+                T = np.array(frame.viewpoint.T)
+                M = np.zeros((4,4))
+                M[0][0] = R[0][0]
+                M[0][1] = R[0][1]
+                M[0][2] = R[0][2]
+                M[1][0] = R[1][0]
+                M[1][1] = R[1][1]
+                M[1][2] = R[1][2]
+                M[2][0] = R[2][0]
+                M[2][1] = R[2][1]
+                M[2][2] = R[2][2]
+                M[0][3] = T[0]
+                M[1][3] = T[1]
+                M[2][3] = T[2]
+                M[3][3] = 1
+                k = frame.sequence_name + "_" + str(frame.frame_number)
+                all_rotation_matrices[k] = M
+
+        
+        T_ai_cam = all_rotation_matrices[reference_seq_code + "_" + str(front_views[category])]
+        T_oa = np.array(relevant_sequences[reference_seq_code]["trans"])
+        for frame in frame_annots_list:
+            if frame.sequence_name in relevant_sequences:
+                #seq to ref seq
+                data = relevant_sequences[frame.sequence_name]
+                T_ob = np.array(data["trans"])
+                k = frame.sequence_name + "_" + str(frame.frame_number)
+                T_bj_cam = all_rotation_matrices[k]
+                GT_frame_pose = np.matmul(inv(T_oa),T_ai_cam)
+                GT_frame_pose = np.matmul(T_ob,GT_frame_pose)
+                GT_frame_pose = np.matmul(inv(T_bj_cam),GT_frame_pose)
+                GT_rot = GT_frame_pose[0:3,0:3]
+                r = Rot.from_matrix(GT_rot)
+                angle2 = abs(r.as_euler("yzx",degrees=True)[0])
+                if category in left_out_categories and angle2 >= 18:
+                    left_out_samples.append([frame.image.path,frame.depth.path,frame.depth.scale_adjustment,frame.depth.mask_path,GT_rot,category])
+                else:
+                    if category in validation_sequences and frame.sequence_name == validation_sequences[category]:
+                        out_val_samples.append([frame.image.path,frame.depth.path,frame.depth.scale_adjustment,frame.depth.mask_path,GT_rot,category])
+                    else:
+                        p = random.uniform(0, 1)
+                        if p <= 0.1:
+                            in_val_samples.append([frame.image.path,frame.depth.path,frame.depth.scale_adjustment,frame.depth.mask_path,GT_rot,category])
+                        else:
+                            train_samples.append([frame.image.path,frame.depth.path,frame.depth.scale_adjustment,frame.depth.mask_path,GT_rot,category])
+    
+    random.shuffle(out_val_samples)
+    random.shuffle(in_val_samples)
+    random.shuffle(train_samples)
+    path = os.path.join(dataset_root,"co3d_train.pkl")
+    with open(path, 'wb') as f:
+        pickle.dump(train_samples, f)
+    path = os.path.join(dataset_root,"co3d_val_out.pkl")
+    with open(path, 'wb') as f:
+        pickle.dump(out_val_samples, f)
+    path = os.path.join(dataset_root,"co3d_val_in.pkl")
+    with open(path, 'wb') as f:
+        pickle.dump(in_val_samples, f)
+    path = os.path.join(dataset_root,"co3d_leftout.pkl")
+    with open(path, 'wb') as f:
+        pickle.dump(left_out_samples, f)
+
+
 if __name__ == "__main__":
 #    create_dataset_list("../../../datasets/co3d","train",["stopsign"],500000)
 #   create_frame_annots_pickle("../../../datasets/co3d","teddybear")
-    create_depth_dataset_new_val("../../../datasets/co3d","../zero-shot-pose/data/class_labels","train")
+#    create_depth_dataset_new_val("../../../datasets/co3d","../zero-shot-pose/data/class_labels","train")
+    create_dataset_4_splits("../../../datasets/co3d","../zero-shot-pose/data/class_labels","train")

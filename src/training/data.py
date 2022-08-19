@@ -115,12 +115,15 @@ class Co3dDataset_CE(Dataset):
         self.annotations_root = annotations_root
         self.transforms = transforms
         self.mode = mode
-        if mode == "train":
-            pickle_file_path = os.path.join(dataset_root,"co3d_train_red_val_out.pkl")
-        elif mode == "val":
-            pickle_file_path = os.path.join(dataset_root,"co3d_val_red_val_out.pkl")
+        if mode=="train":
+            samples_filename = "co3d_train.pkl"
+        elif mode=="val_in":
+            samples_filename = "co3d_val_in.pkl"
+        elif mode=="val_out":
+            samples_filename = "co3d_val_out.pkl"
         else:
-            pickle_file_path = os.path.join(dataset_root,"co3d_leftout_red_val_out.pkl")
+            samples_filename = "co3d_leftout.pkl"
+        pickle_file_path = os.path.join(dataset_root,samples_filename)
 
         self.all_samples = pd.read_pickle(pickle_file_path)
         self.classnames = []
@@ -611,17 +614,19 @@ def get_new_co3d_dataset(args, preprocess_fn, is_train, is_val, epoch=0):
     dataloader.num_batches = len(dataloader)
 
     return DataInfo(dataloader, sampler)
-def get_co3d_dataset_ce(args, preprocess_fn, is_train, is_val, epoch=0):
+def get_co3d_dataset_ce(args, preprocess_fn, is_train, is_val_in, is_val_out, epoch=0):
     if is_train:
         input_filename = args.train_data
         mode = "train"
+    elif is_val_in:
+        input_filename = args.val_in_data
+        mode = "val_in"
+    elif is_val_out:
+        input_filename = args.val_out_data
+        mode = "val_out"
     else:
-        if is_val:
-            input_filename = args.val_data
-            mode = "val"
-        else:
-            input_filename = args.zeroshot_data
-            mode = "zeroshot"
+        input_filename = args.zeroshot_data
+        mode = "zeroshot"
     annot_filename = args.annot_data
     categories = args.categories
     assert input_filename
@@ -704,13 +709,16 @@ def get_data(args, preprocess_fns, epoch=0):
 
     if args.train_data:
         data["train"] = get_dataset_fn(args.train_data, args.dataset_type)(
-            args, preprocess_train, is_train=True, is_val=False)
-    if args.val_data:
-        data["val"] = get_dataset_fn(args.val_data, args.dataset_type)(
-            args, preprocess_val, is_train=False, is_val=True)
+            args, preprocess_train, is_train=True, is_val_in=False, is_val_out=False)
+    if args.val_in_data:
+        data["val_in"] = get_dataset_fn(args.val_in_data, args.dataset_type)(
+            args, preprocess_val, is_train=False, is_val_in=True,is_val_out=False)
+    if args.val_in_data:
+        data["val_out"] = get_dataset_fn(args.val_out_data, args.dataset_type)(
+            args, preprocess_val, is_train=False, is_val_in=False, is_val_out=True)
     if args.zeroshot_data:
         data["zeroshot"] = get_dataset_fn(args.zeroshot_data, args.dataset_type)(
-            args, preprocess_val, is_train=False, is_val=False)
+            args, preprocess_val, is_train=False, is_val_in=False,is_val_out=False)
     if args.imagenet_val is not None:
         data["imagenet-val"] = get_imagenet(args, preprocess_fns, "val")
 
