@@ -385,6 +385,7 @@ class CLIP(nn.Module):
 
         self.vocab_size = text_cfg.vocab_size
         self.token_embedding = nn.Embedding(text_cfg.vocab_size, text_cfg.width)
+        self.view_token_embedding = nn.Embedding(10,text_cfg.width)
         self.positional_embedding = nn.Parameter(torch.empty(self.context_length, text_cfg.width))
         self.ln_final = LayerNorm(text_cfg.width)
 
@@ -434,8 +435,11 @@ class CLIP(nn.Module):
     def encode_image(self, image):
         return self.visual(image)
 
-    def encode_text(self, text):
+    def encode_text(self, text, view):
+        if view != None:
+            x_view = self.view_token_embedding(view)
         x = self.token_embedding(text)  # [batch_size, n_ctx, d_model]
+
 
         x = x + self.positional_embedding
         x = x.permute(1, 0, 2)  # NLD -> LND
@@ -514,6 +518,8 @@ def build_model_from_openai_state_dict(state_dict: dict):
     transformer_heads = transformer_width // 64
     transformer_layers = len(set(k.split(".")[2] for k in state_dict if k.startswith(f"transformer.resblocks")))
 
+ 
+
     vision_cfg = CLIPVisionCfg(
         layers=vision_layers,
         width=vision_width,
@@ -533,6 +539,10 @@ def build_model_from_openai_state_dict(state_dict: dict):
         text_cfg=text_cfg,
         quick_gelu=True,  # OpenAI models were trained with QuickGELU
     )
+
+    temp_view_embedding = nn.Embedding(10,text_cfg.width)
+    nn.init.normal_(temp_view_embedding.weight, std=0.02)
+    state_dict["view_token_embedding.weight"] = temp_view_embedding.weight
 
     for key in ["input_resolution", "context_length", "vocab_size"]:
         state_dict.pop(key, None)

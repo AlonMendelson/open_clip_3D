@@ -218,7 +218,7 @@ class Co3dDataset_CE(Dataset):
         target = train_val_target/torch.sum(train_val_target)
 
 
-        return image, target
+        return image, target, quantized_angle
 
 class Co3dDataset(Dataset):
     def __init__(self,transforms,dataset_root,mode,categories):

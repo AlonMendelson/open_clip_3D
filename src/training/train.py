@@ -19,7 +19,7 @@ from .distributed import is_master
 from .zero_shot import zero_shot_eval
 from .zero_shot_co3d import zero_shot_eval_co3d
 from open_clip import tokenize
-from .co3d_zeroshot_data import co3d_classnames, co3d_template
+from .co3d_zeroshot_data import co3d_classnames, co3d_template, co3d_loss_template
 
 def create_classifier(model, classnames, templates, args,with_grad):
     autocast = torch.cuda.amp.autocast if args.precision == 'amp' else suppress
