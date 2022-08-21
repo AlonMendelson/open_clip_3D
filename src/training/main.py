@@ -135,6 +135,13 @@ def main():
             unlocked_groups=args.lock_image_unlocked_groups,
             freeze_bn_stats=args.lock_image_freeze_bn_stats)
 
+    if args.lock_text:
+        for param in model.parameters():
+            param.requires_grad = False
+        for param in model.view_token_embedding.parameters():
+            param.requires_grad_()
+    
+
     if args.grad_checkpointing:
         model.set_grad_checkpointing()
 

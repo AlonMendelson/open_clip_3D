@@ -109,12 +109,13 @@ class Co3dDataset_New(Dataset):
         return image, text, target
 
 class Co3dDataset_CE(Dataset):
-    def __init__(self,transforms,dataset_root,annotations_root,mode,categories):
+    def __init__(self,transforms,dataset_root,annotations_root,mode,categories,granularity):
         logging.debug(f'Creating data from {dataset_root}.')
         self.dataset_root = dataset_root
         self.annotations_root = annotations_root
         self.transforms = transforms
         self.mode = mode
+        self.granularity = granularity
         if mode=="train":
             samples_filename = "co3d_train.pkl"
         elif mode=="val_in":
@@ -171,13 +172,13 @@ class Co3dDataset_CE(Dataset):
         angle = r.as_euler('yzx',degrees=True)[0]
         angle = abs(angle)
 
-        granularity  = 18
+        granularity  = self.granularity
 
-        classes_per_category = len(co3d_template)
+        classes_per_category = int(math.floor(180/granularity))
 
         quantized_angle = int(math.floor(angle/granularity))
 
-        class_within_category = quantized_angle + 1
+        class_within_category = quantized_angle
 
         category_index = co3d_classnames.index(sample_category)
 
@@ -205,20 +206,20 @@ class Co3dDataset_CE(Dataset):
         else:
             category_label_prob = 0.0
 
-        train_val_target = torch.zeros(len(self.classnames),dtype=torch.float32)
+        train_val_target = torch.zeros(len(co3d_classnames)*classes_per_category,dtype=torch.float32)
 
         train_val_target[label1] = label1_prob
-        if label2 < len(self.classnames):
+        if label2 < len(co3d_classnames)*classes_per_category:
             train_val_target[label2] = label2_prob
         train_val_target[label3] = label3_prob
-        train_val_target[category_label] = category_label_prob
+        #train_val_target[category_label] = category_label_prob
 
 
 
         target = train_val_target/torch.sum(train_val_target)
 
 
-        return image, target, quantized_angle
+        return image, target
 
 class Co3dDataset(Dataset):
     def __init__(self,transforms,dataset_root,mode,categories):
@@ -635,7 +636,8 @@ def get_co3d_dataset_ce(args, preprocess_fn, is_train, is_val_in, is_val_out, ep
         input_filename,
         annot_filename,
         mode,
-        categories)
+        categories,
+        args.granularity)
     num_samples = len(dataset)
     sampler = DistributedSampler(dataset) if args.distributed and is_train else None
     shuffle = is_train and sampler is None

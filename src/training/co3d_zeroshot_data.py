@@ -22,3 +22,4 @@ co3d_template = [
 ]
 
 co3d_loss_template = [lambda c: f'a photo of a {c}.']
+

@@ -67,6 +67,7 @@ def unwrap_model(model):
 def train_one_epoch(model, reference_model, data, epoch, optimizer, scaler, scheduler, args, tb_writer=None):
     device = torch.device(args.device)
     autocast = torch.cuda.amp.autocast if args.precision == 'amp' else suppress
+    bins = int(math.floor(180/args.granularity))
 
     model.train()
     loss = torch.nn.CrossEntropyLoss()
@@ -90,12 +91,17 @@ def train_one_epoch(model, reference_model, data, epoch, optimizer, scaler, sche
 
         #create classifier
         texts = []
+        views = []
         for classname in co3d_classnames:
-            texts_class = [template(classname) for template in co3d_template]  # format with class
+            texts_class = [template(classname) for template in co3d_loss_template for l in range(bins)]  # format with class
             texts_class = tokenize(texts_class).to(args.device)  # tokenize
             texts.append(texts_class)
+            views.append(torch.arange(0,bins,1,dtype=texts_class.dtype,device=args.device))
         texts = torch.stack(texts, dim=0).to(args.device)
-        texts = texts.view(-1,texts.shape[2]) 
+        views = torch.stack(views,dim=0).to(args.device)
+        texts = texts.view(-1,texts.shape[2])
+        views = views.view(-1,1)
+
 
         step = num_batches_per_epoch * epoch + i
         scheduler(step)
@@ -108,7 +114,7 @@ def train_one_epoch(model, reference_model, data, epoch, optimizer, scaler, sche
         optimizer.zero_grad()
 
         with autocast():
-            image_features,text_features, logit_scale = model(images,texts)
+            image_features,text_features, logit_scale = model(images,texts,view = views)
             logits = logit_scale * image_features @ text_features.t()
             #try using the gather they do
             total_loss = loss(logits,targets)
@@ -176,6 +182,7 @@ def train_one_epoch(model, reference_model, data, epoch, optimizer, scaler, sche
 
 
 def evaluate(model, data, epoch, args, tb_writer=None):
+    bins = int(math.floor(180/args.granularity))
     metrics = {}
     if not is_master(args):
         return metrics
@@ -211,17 +218,22 @@ def evaluate(model, data, epoch, args, tb_writer=None):
                 images, targets = batch
                 images = images.to(device=device, non_blocking=True)
                         #create classifier
+        #create classifier
                 texts = []
+                views = []
                 for classname in co3d_classnames:
-                    texts_class = [template(classname) for template in co3d_template]  # format with class
+                    texts_class = [template(classname) for template in co3d_loss_template for l in range(bins)]  # format with class
                     texts_class = tokenize(texts_class).to(args.device)  # tokenize
                     texts.append(texts_class)
+                    views.append(torch.arange(0,bins,1,dtype=texts_class.dtype,device=args.device))
                 texts = torch.stack(texts, dim=0).to(args.device)
-                texts = texts.view(-1,texts.shape[2]) 
+                views = torch.stack(views,dim=0).to(args.device)
+                texts = texts.view(-1,texts.shape[2])
+                views = views.view(-1,1)
                 targets = targets.to(device=device, non_blocking=True)
 
                 with autocast():
-                    image_features, text_features, logit_scale = model(images, texts)
+                    image_features, text_features, logit_scale = model(images, texts, views)
                     # features are accumulated in CPU tensors, otherwise GPU memory exhausted quickly
                     # however, system RAM is easily exceeded and compute time becomes problematic
                     logit_scale = logit_scale.mean()

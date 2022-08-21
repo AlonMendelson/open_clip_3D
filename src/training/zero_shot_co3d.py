@@ -4,22 +4,30 @@ from contextlib import suppress
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
+import math
 
 from open_clip import tokenize
-from .co3d_zeroshot_data import co3d_classnames, co3d_template
+from .co3d_zeroshot_data import co3d_classnames, co3d_template, co3d_loss_template
 
 
 def zero_shot_classifier(model, classnames, templates, args):
+    bins = int(math.floor(180/args.granularity))
     with torch.no_grad():
-        new_classnames = []
-        zeroshot_weights = []
-        for classname in tqdm(classnames):
-            new_classnames += [template(classname) for template in templates]  # format with class
-        texts = tokenize(new_classnames).to(args.device)  # tokenize
+        texts = []
+        views = []
+        for classname in co3d_classnames:
+            texts_class = [template(classname) for template in co3d_loss_template for l in range(bins)]  # format with class
+            texts_class = tokenize(texts_class).to(args.device)  # tokenize
+            texts.append(texts_class)
+            views.append(torch.arange(0,bins,1,dtype=texts_class.dtype,device=args.device))
+        texts = torch.stack(texts, dim=0).to(args.device)
+        views = torch.stack(views,dim=0).to(args.device)
+        texts = texts.view(-1,texts.shape[2])
+        views = views.view(-1,1)
         if args.distributed and not args.horovod:
-            class_embeddings = model.module.encode_text(texts)
+            class_embeddings = model.module.encode_text(texts, views)
         else:
-            class_embeddings = model.encode_text(texts)
+            class_embeddings = model.encode_text(texts, views)
         zeroshot_weights = class_embeddings
     return zeroshot_weights
 

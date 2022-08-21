@@ -385,7 +385,8 @@ class CLIP(nn.Module):
 
         self.vocab_size = text_cfg.vocab_size
         self.token_embedding = nn.Embedding(text_cfg.vocab_size, text_cfg.width)
-        self.view_token_embedding = nn.Embedding(10,text_cfg.width)
+        self.view_tokens = 4
+        self.view_token_embedding = nn.Embedding(10,text_cfg.width * self.view_tokens)
         self.positional_embedding = nn.Parameter(torch.empty(self.context_length, text_cfg.width))
         self.ln_final = LayerNorm(text_cfg.width)
 
@@ -427,6 +428,7 @@ class CLIP(nn.Module):
         # lock image tower as per LiT - https://arxiv.org/abs/2111.07991
         self.visual.lock(unlocked_groups=unlocked_groups, freeze_bn_stats=freeze_bn_stats)
 
+
     @torch.jit.ignore
     def set_grad_checkpointing(self, enable=True):
         self.visual.set_grad_checkpointing(enable)
@@ -435,12 +437,18 @@ class CLIP(nn.Module):
     def encode_image(self, image):
         return self.visual(image)
 
-    def encode_text(self, text, view):
-        if view != None:
-            x_view = self.view_token_embedding(view)
+    def encode_text(self, text, view = None):
+        num_tokens = text.shape[1]
         x = self.token_embedding(text)  # [batch_size, n_ctx, d_model]
-
-
+        #add view tokens before eot token
+        if view != None:
+            text_len = text[0].argmax(dim=-1)
+            x_view = self.view_token_embedding(view)
+            x,x_2,x_3 = torch.split(x,[text_len.item(), 1, num_tokens - text_len.item() - 1],dim=1)
+            for i in range(self.view_tokens):
+                x = torch.cat((x,x_view[:,:,i*x.shape[2]:(i+1)*x.shape[2]]),dim=1)
+            x = torch.cat((x,x_2,x_3[:,:-self.view_tokens,:]),dim=1)
+            
         x = x + self.positional_embedding
         x = x.permute(1, 0, 2)  # NLD -> LND
         x = self.transformer(x, attn_mask=self.attn_mask)
@@ -449,19 +457,22 @@ class CLIP(nn.Module):
 
         # x.shape = [batch_size, n_ctx, transformer.width]
         # take features from the eot embedding (eot_token is the highest number in each sequence)
-        x = x[torch.arange(x.shape[0]), text.argmax(dim=-1)] @ self.text_projection
+        if view != None:
+            x = x[torch.arange(x.shape[0]), text.argmax(dim=-1) + self.view_tokens] @ self.text_projection
+        else:
+            x = x[torch.arange(x.shape[0]), text.argmax(dim=-1)] @ self.text_projection
 
         return x
 
-    def forward(self, image, text):
+    def forward(self, image, text, view = None):
         if image is None:
-            return self.encode_text(text)
+            return self.encode_text(text, view)
         elif text is None:
             return self.encode_image(image)
         image_features = self.encode_image(image)
         image_features = F.normalize(image_features, dim=-1)
 
-        text_features = self.encode_text(text)
+        text_features = self.encode_text(text, view)
         text_features = F.normalize(text_features, dim=-1)
 
         return image_features, text_features, self.logit_scale.exp()
@@ -540,7 +551,7 @@ def build_model_from_openai_state_dict(state_dict: dict):
         quick_gelu=True,  # OpenAI models were trained with QuickGELU
     )
 
-    temp_view_embedding = nn.Embedding(10,text_cfg.width)
+    temp_view_embedding = nn.Embedding(10,text_cfg.width * 4)
     nn.init.normal_(temp_view_embedding.weight, std=0.02)
     state_dict["view_token_embedding.weight"] = temp_view_embedding.weight
 

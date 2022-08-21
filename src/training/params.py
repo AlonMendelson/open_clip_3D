@@ -50,6 +50,12 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--granularity",
+        type=float,
+        default=18.0,
+        help="size of rotation bins (degrees)",
+    )
+    parser.add_argument(
         "--wise",
         type=str,
         default=None,
@@ -207,6 +213,12 @@ def parse_args():
         default=False,
         action='store_true',
         help="Lock full image tower by disabling gradients.",
+    )
+    parser.add_argument(
+        "--lock-text",
+        default=False,
+        action='store_true',
+        help="Lock full text tower by disabling gradients.",
     )
     parser.add_argument(
         "--lock-image-unlocked-groups",
