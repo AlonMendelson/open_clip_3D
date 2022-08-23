@@ -192,14 +192,14 @@ def evaluate(model, data, epoch, args, tb_writer=None):
     zero_shot_metrics = zero_shot_eval(model, data, epoch, args)
     metrics.update(zero_shot_metrics)
 
-    co3d_in_val_metric = zero_shot_eval_co3d(model, data["val_in"], epoch, "val-in-co3d",args)
+    co3d_in_val_metric, confmat_in = zero_shot_eval_co3d(model, data["val_in"], epoch, "val-in-co3d",args)
     metrics.update(co3d_in_val_metric)
 
-    co3d_out_val_metric = zero_shot_eval_co3d(model, data["val_out"], epoch, "val-out-co3d",args)
+    co3d_out_val_metric, confmat_out = zero_shot_eval_co3d(model, data["val_out"], epoch, "val-out-co3d",args)
     metrics.update(co3d_out_val_metric)
 
     if args.zeroshot_data:
-        co3d_zeroshot_metric = zero_shot_eval_co3d(model, data["zeroshot"], epoch, "zeroshot-co3d",args)
+        co3d_zeroshot_metric, confmat_zeroshot = zero_shot_eval_co3d(model, data["zeroshot"], epoch, "zeroshot-co3d",args)
         metrics.update(co3d_zeroshot_metric)
 
 
@@ -217,8 +217,6 @@ def evaluate(model, data, epoch, args, tb_writer=None):
             for i, batch in enumerate(dataloader):
                 images, targets = batch
                 images = images.to(device=device, non_blocking=True)
-                        #create classifier
-        #create classifier
                 texts = []
                 views = []
                 for classname in co3d_classnames:
@@ -271,6 +269,13 @@ def evaluate(model, data, epoch, args, tb_writer=None):
         with open(os.path.join(args.checkpoint_path, "results.jsonl"), "a+") as f:
             f.write(json.dumps(metrics))
             f.write("\n")
+
+        torch.save(confmat_in,
+                    os.path.join(args.checkpoint_path, f"epoch_{epoch}_confmat_in.pt"))
+        torch.save(confmat_out,
+                    os.path.join(args.checkpoint_path, f"epoch_{epoch}_confmat_out.pt"))
+        torch.save(confmat_zeroshot,
+                    os.path.join(args.checkpoint_path, f"epoch_{epoch}_confmat_zeroshot.pt"))
 
     if args.wandb:
         assert wandb is not None, 'Please install wandb.'
