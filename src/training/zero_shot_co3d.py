@@ -42,8 +42,8 @@ def accuracy(output, target, topk=(1,)):
 
 def run(model, classifier, dataloader, args):
     autocast = torch.cuda.amp.autocast if args.precision == 'amp' else suppress
-    confmat = ConfusionMatrix(num_classes=classifier.shape[0])
     with torch.no_grad():
+        #confmat = ConfusionMatrix(num_classes=classifier.shape[0])
         top1, top3, n = 0., 0., 0.
         for images, targets in tqdm(dataloader, unit_scale=args.batch_size):
             images = images.to(args.device)
@@ -64,11 +64,11 @@ def run(model, classifier, dataloader, args):
             top1 += acc1
             top3 += acc3
             n += images.size(0)
-            confmat.update(torch.argmax(logits,dim=1).detach().cpu(),target.detach().cpu())
-
+            #confmat.update(torch.argmax(logits,dim=1).detach().cpu(),target.detach().cpu())
+    #confusion_tensor = confmat.compute()
     top1 = (top1 / n)
     top3 = (top3 / n)
-    return top1, top3, confmat.compute()
+    return top1, top3#, confusion_tensor
 
 
 def zero_shot_eval_co3d(model, data, epoch, name, args):
@@ -86,10 +86,11 @@ def zero_shot_eval_co3d(model, data, epoch, name, args):
 
     logging.info('Using classifier')
     results = {}
-    top1, top3, confmat = run(model, classifier, data.dataloader, args)
+    #top1, top3, confmat = run(model, classifier, data.dataloader, args)
+    top1, top3 = run(model, classifier, data.dataloader, args)
     results[name + "-top1"] = top1
     results[name + "-top3"] = top3
 
     logging.info('Finished '+ name)
 
-    return results, confmat
+    return results#, confmat

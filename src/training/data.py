@@ -172,7 +172,7 @@ class Co3dDataset_CE(Dataset):
         angle = r.as_euler('yzx',degrees=True)[0]
         angle = abs(angle)
 
-        granularity  = self.granularity
+        granularity = self.granularity
 
         classes_per_category = int(math.floor(180/granularity))
 
@@ -184,21 +184,21 @@ class Co3dDataset_CE(Dataset):
 
         label1 = category_index*classes_per_category + class_within_category
         if self.mode == "train":
-            label1_prob = 1.0
+            label1_prob = 0.8
         else:
             label1_prob = 1.0
 
         label2 = label1 + 1
-        if class_within_category == classes_per_category - 1 or self.mode == "val" or self.mode == "zeroshot":
+        if class_within_category == classes_per_category - 1 or self.mode != "train":
             label2_prob = 0.0 
         else:
-            label2_prob = 0.0
+            label2_prob = 0.1
 
         label3 = label1 - 1
-        if class_within_category == 1 or self.mode == "val" or self.mode == "zeroshot":
+        if class_within_category == 0 or self.mode != "train":
             label3_prob = 0.0 
         else:
-            label3_prob = 0.0
+            label3_prob = 0.1
 
         category_label = category_index*classes_per_category
         if self.mode == "train":
@@ -211,7 +211,8 @@ class Co3dDataset_CE(Dataset):
         train_val_target[label1] = label1_prob
         if label2 < len(co3d_classnames)*classes_per_category:
             train_val_target[label2] = label2_prob
-        train_val_target[label3] = label3_prob
+        if label3 >= 0:
+            train_val_target[label3] = label3_prob
         #train_val_target[category_label] = category_label_prob
 
 
