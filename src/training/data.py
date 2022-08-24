@@ -184,7 +184,7 @@ class Co3dDataset_CE(Dataset):
 
         label1 = category_index*classes_per_category + class_within_category
         if self.mode == "train":
-            label1_prob = 0.8
+            label1_prob = 1.0
         else:
             label1_prob = 1.0
 
@@ -192,13 +192,13 @@ class Co3dDataset_CE(Dataset):
         if class_within_category == classes_per_category - 1 or self.mode != "train":
             label2_prob = 0.0 
         else:
-            label2_prob = 0.1
+            label2_prob = 0.0
 
         label3 = label1 - 1
         if class_within_category == 0 or self.mode != "train":
             label3_prob = 0.0 
         else:
-            label3_prob = 0.1
+            label3_prob = 0.0
 
         category_label = category_index*classes_per_category
         if self.mode == "train":

@@ -140,6 +140,8 @@ def main():
             param.requires_grad = False
         for param in model.view_token_embedding.parameters():
             param.requires_grad_()
+        for param in model.visual.parameters():
+            param.requires_grad_()
     
 
     if args.grad_checkpointing:
