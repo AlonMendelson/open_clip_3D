@@ -15,6 +15,7 @@ from torch.utils.checkpoint import checkpoint
 
 from .timm_model import TimmModel
 from .utils import freeze_batch_norm_2d
+import loralib as lora
 
 
 class Bottleneck(nn.Module):
@@ -207,17 +208,24 @@ class QuickGELU(nn.Module):
 
 
 class ResidualAttentionBlock(nn.Module):
-    def __init__(self, d_model: int, n_head: int, mlp_ratio: float = 4.0, act_layer: Callable = nn.GELU):
+    def __init__(self, d_model: int, n_head: int, mlp_ratio: float = 4.0, lora_bit = False, act_layer: Callable = nn.GELU):
         super().__init__()
 
         self.attn = nn.MultiheadAttention(d_model, n_head)
         self.ln_1 = LayerNorm(d_model)
         mlp_width = int(d_model * mlp_ratio)
-        self.mlp = nn.Sequential(OrderedDict([
-            ("c_fc", nn.Linear(d_model, mlp_width)),
-            ("gelu", act_layer()),
-            ("c_proj", nn.Linear(mlp_width, d_model))
-        ]))
+        if lora_bit == False:
+            self.mlp = nn.Sequential(OrderedDict([
+                ("c_fc", nn.Linear(d_model, mlp_width)),
+                ("gelu", act_layer()),
+                ("c_proj", nn.Linear(mlp_width, d_model))
+            ]))
+        else:
+            self.mlp = nn.Sequential(OrderedDict([
+                ("c_fc", lora.Linear(d_model, mlp_width,r=32)),
+                ("gelu", act_layer()),
+                ("c_proj", lora.Linear(mlp_width, d_model,r=32))
+            ]))
         self.ln_2 = LayerNorm(d_model)
 
     def attention(self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None):
@@ -230,14 +238,14 @@ class ResidualAttentionBlock(nn.Module):
 
 
 class Transformer(nn.Module):
-    def __init__(self, width: int, layers: int, heads: int,  mlp_ratio: float = 4.0, act_layer: Callable = nn.GELU):
+    def __init__(self, width: int, layers: int, heads: int, lora_bit:bool = False,  mlp_ratio: float = 4.0, act_layer: Callable = nn.GELU):
         super().__init__()
         self.width = width
         self.layers = layers
         self.grad_checkpointing = False
 
         self.resblocks = nn.ModuleList([
-            ResidualAttentionBlock(width, heads, mlp_ratio, act_layer=act_layer)
+            ResidualAttentionBlock(width, heads, mlp_ratio, lora_bit,  act_layer=act_layer)
             for _ in range(layers)
         ])
 
@@ -253,18 +261,21 @@ class Transformer(nn.Module):
 class VisualTransformer(nn.Module):
     def __init__(
             self, image_size: int, patch_size: int, width: int, layers: int, heads: int, mlp_ratio: float,
-            output_dim: int, act_layer: Callable = nn.GELU):
+            output_dim: int, act_layer: Callable = nn.GELU, lora_bit: bool = False):
         super().__init__()
+        self.lora_bit = lora_bit
         self.image_size = image_size
         self.output_dim = output_dim
-        self.conv1 = nn.Conv2d(in_channels=3, out_channels=width, kernel_size=patch_size, stride=patch_size, bias=False)
-
+        if self.lora_bit == False:
+            self.conv1 = nn.Conv2d(in_channels=3, out_channels=width, kernel_size=patch_size, stride=patch_size, bias=False)
+        else:
+            self.conv1 = lora.Conv2d(in_channels=3, out_channels=width, kernel_size=patch_size, r=32, stride=patch_size, bias=False)
         scale = width ** -0.5
         self.class_embedding = nn.Parameter(scale * torch.randn(width))
         self.positional_embedding = nn.Parameter(scale * torch.randn((image_size // patch_size) ** 2 + 1, width))
         self.ln_pre = LayerNorm(width)
 
-        self.transformer = Transformer(width, layers, heads, mlp_ratio, act_layer=act_layer)
+        self.transformer = Transformer(width, layers, heads, self.lora_bit, mlp_ratio, act_layer=act_layer)
 
         self.ln_post = LayerNorm(width)
         self.proj = nn.Parameter(scale * torch.randn(width, output_dim))
@@ -336,7 +347,8 @@ class CLIP(nn.Module):
             vision_cfg = CLIPVisionCfg(**vision_cfg)
         if isinstance(text_cfg, dict):
             text_cfg = CLIPTextCfg(**text_cfg)
-
+        self.lora_bit_vision = True
+        self.lora_bit_text = False
         self.context_length = text_cfg.context_length
 
         # OpenAI models are pretrained w/ QuickGELU but native nn.GELU is both faster and more
@@ -374,6 +386,7 @@ class CLIP(nn.Module):
                 mlp_ratio=vision_cfg.mlp_ratio,
                 output_dim=embed_dim,
                 act_layer=act_layer,
+                lora_bit= self.lora_bit_vision
             )
 
         self.transformer = Transformer(
@@ -381,10 +394,14 @@ class CLIP(nn.Module):
             layers=text_cfg.layers,
             heads=text_cfg.heads,
             act_layer=act_layer,
+            lora_bit= self.lora_bit_text
         )
 
         self.vocab_size = text_cfg.vocab_size
-        self.token_embedding = nn.Embedding(text_cfg.vocab_size, text_cfg.width)
+        if self.lora_bit_text == False:
+            self.token_embedding = nn.Embedding(text_cfg.vocab_size, text_cfg.width)
+        else:
+            self.token_embedding = lora.Embedding(text_cfg.vocab_size, text_cfg.width, r=32)
         self.positional_embedding = nn.Parameter(torch.empty(self.context_length, text_cfg.width))
         self.ln_final = LayerNorm(text_cfg.width)
 
@@ -538,7 +555,7 @@ def build_model_from_openai_state_dict(state_dict: dict):
         state_dict.pop(key, None)
 
     convert_weights_to_fp16(model)
-    model.load_state_dict(state_dict)
+    model.load_state_dict(state_dict, strict=False)
     return model.eval()
 
 

@@ -8,6 +8,7 @@ import numpy as np
 import torch
 from torch import optim
 from torch.cuda.amp import GradScaler
+import loralib as lora
 
 try:
     import wandb
@@ -134,6 +135,8 @@ def main():
         model.lock_image_tower(
             unlocked_groups=args.lock_image_unlocked_groups,
             freeze_bn_stats=args.lock_image_freeze_bn_stats)
+    
+    lora.mark_only_lora_as_trainable(model)
 
     if args.grad_checkpointing:
         model.set_grad_checkpointing()
