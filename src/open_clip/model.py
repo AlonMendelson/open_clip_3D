@@ -347,7 +347,7 @@ class CLIP(nn.Module):
             vision_cfg = CLIPVisionCfg(**vision_cfg)
         if isinstance(text_cfg, dict):
             text_cfg = CLIPTextCfg(**text_cfg)
-        self.lora_bit_vision = True
+        self.lora_bit_vision = False
         self.lora_bit_text = False
         self.context_length = text_cfg.context_length
 

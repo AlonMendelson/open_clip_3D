@@ -112,8 +112,10 @@ def train_one_epoch(model, reference_model, data, epoch, optimizer, scaler, sche
             logits = logit_scale * image_features @ text_features.t()
             #try using the gather they do
             total_loss = loss(logits,targets)
-            #total_loss = loss(model,logits,targets)
-
+            with torch.no_grad():
+                orig_image_features = reference_model(images,None)
+                constraint_loss = (image_features @ orig_image_features.t()).sum()*1000
+            total_loss += constraint_loss
         if scaler is not None:
             scaler.scale(total_loss).backward()
             if args.horovod:
