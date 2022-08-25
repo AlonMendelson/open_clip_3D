@@ -67,7 +67,7 @@ def unwrap_model(model):
 def train_one_epoch(model, reference_model, data, epoch, optimizer, scaler, scheduler, args, tb_writer=None):
     device = torch.device(args.device)
     autocast = torch.cuda.amp.autocast if args.precision == 'amp' else suppress
-    bins = int(math.floor(180/args.granularity))
+    bins = int(math.floor(args.angle_range/args.granularity))
 
     model.train()
     loss = torch.nn.CrossEntropyLoss()
@@ -182,7 +182,7 @@ def train_one_epoch(model, reference_model, data, epoch, optimizer, scaler, sche
 
 
 def evaluate(model, data, epoch, args, tb_writer=None):
-    bins = int(math.floor(180/args.granularity))
+    bins = int(math.floor(args.angle_range/args.granularity))
     metrics = {}
     if not is_master(args):
         return metrics

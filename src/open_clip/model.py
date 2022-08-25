@@ -386,7 +386,7 @@ class CLIP(nn.Module):
         self.vocab_size = text_cfg.vocab_size
         self.token_embedding = nn.Embedding(text_cfg.vocab_size, text_cfg.width)
         self.view_tokens = 1 #view tokens
-        self.view_token_embedding = nn.Embedding(10,text_cfg.width * self.view_tokens)
+        self.view_token_embedding = nn.Embedding(20,text_cfg.width * self.view_tokens)
         self.positional_embedding = nn.Parameter(torch.empty(self.context_length, text_cfg.width))
         self.ln_final = LayerNorm(text_cfg.width)
 
@@ -551,7 +551,7 @@ def build_model_from_openai_state_dict(state_dict: dict):
         quick_gelu=True,  # OpenAI models were trained with QuickGELU
     )
 
-    temp_view_embedding = nn.Embedding(10,text_cfg.width * 1) #view tokens
+    temp_view_embedding = nn.Embedding(20,text_cfg.width * 1) #view tokens
     nn.init.normal_(temp_view_embedding.weight, std=0.02)
     state_dict["view_token_embedding.weight"] = temp_view_embedding.weight
 

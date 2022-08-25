@@ -55,6 +55,14 @@ def parse_args():
         default=18.0,
         help="size of rotation bins (degrees)",
     )
+
+    parser.add_argument(
+        "--angle-range",
+        type=float,
+        default=360.0,
+        help="180 or 360 degrees",
+    )
+
     parser.add_argument(
         "--wise",
         type=str,

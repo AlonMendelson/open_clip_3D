@@ -109,13 +109,14 @@ class Co3dDataset_New(Dataset):
         return image, text, target
 
 class Co3dDataset_CE(Dataset):
-    def __init__(self,transforms,dataset_root,annotations_root,mode,categories,granularity):
+    def __init__(self,transforms,dataset_root,annotations_root,mode,categories,granularity,angle_range):
         logging.debug(f'Creating data from {dataset_root}.')
         self.dataset_root = dataset_root
         self.annotations_root = annotations_root
         self.transforms = transforms
         self.mode = mode
         self.granularity = granularity
+        self.angle_range = angle_range
         if mode=="train":
             samples_filename = "co3d_train.pkl"
         elif mode=="val_in":
@@ -170,11 +171,15 @@ class Co3dDataset_CE(Dataset):
 
         r = Rot.from_matrix(gt_pose)
         angle = r.as_euler('yzx',degrees=True)[0]
-        angle = abs(angle)
+        if self.angle_range == 180:
+            angle = abs(angle)
+        else:
+            if angle < 0:
+                angle = 360 + angle
 
         granularity = self.granularity
 
-        classes_per_category = int(math.floor(180/granularity))
+        classes_per_category = int(math.floor(self.angle_range/granularity))
 
         quantized_angle = int(math.floor(angle/granularity))
 
@@ -638,7 +643,8 @@ def get_co3d_dataset_ce(args, preprocess_fn, is_train, is_val_in, is_val_out, ep
         annot_filename,
         mode,
         categories,
-        args.granularity)
+        args.granularity,
+        args.angle_range)
     num_samples = len(dataset)
     sampler = DistributedSampler(dataset) if args.distributed and is_train else None
     shuffle = is_train and sampler is None

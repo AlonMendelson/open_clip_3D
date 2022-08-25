@@ -13,7 +13,7 @@ from torchmetrics import ConfusionMatrix
 
 
 def zero_shot_classifier(model, classnames, templates, args):
-    bins = int(math.floor(180/args.granularity))
+    bins = int(math.floor(args.angle_range/args.granularity))
     with torch.no_grad():
         texts = []
         views = []
